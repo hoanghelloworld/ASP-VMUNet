@@ -12,7 +12,7 @@
 ### Environments
 
 ## 0. Main Environments
-The environment configuration refers [VM-UNet](https://github.com/JCruan519/VM-UNet) and [Ulrealight-VMUNet](https://github.com/wurenkai/UltraLight-VM-UNet)
+The environment configuration refers [VM-UNet](https://github.com/JCruan519/VM-UNet).
 ```bash
 conda create -n vmunet python=3.8
 conda activate vmunet

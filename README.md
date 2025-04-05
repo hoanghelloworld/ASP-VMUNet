@@ -6,8 +6,9 @@
 
 
 ### NEWS:
-- 2024.03.25: Paper is uploaded in [arXiv](https://arxiv.org/abs/2503.19427)
-- 2024.12.16: The repository is created.
+- 2025.04.05: The code was uploaded
+- 2025.03.25: Paper was uploaded in [arXiv](https://arxiv.org/abs/2503.19427)
+- 2024.12.16: The repository was created.
 
 ### Environments
 

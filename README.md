@@ -3,8 +3,10 @@
 ### Authors:
 - **[Muyi Bao](https://github.com/BaoBao0926/BaoBao0926.github.io)**, **Shuchang Lyu**, **Zhaoyang Xu**, **Qi Zhao**, **Changyu Zeng**, **Wenpei Bai**, **Guangliang Cheng**
 
+
+
 ### NEWS:
-- Code is coming soon
+- 2024.03.25: Paper is uploaded in [arXiv](https://arxiv.org/abs/2503.19427)
 - 2024.12.16: The repository is created.
 
 

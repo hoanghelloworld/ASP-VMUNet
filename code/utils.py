@@ -248,10 +248,11 @@ def save_imgs(img, msk, msk_pred, i, save_path, datasets, threshold=0.5, test_da
     plt.subplot(3,1,3)
     plt.imshow(msk_pred, cmap = 'gray')
     plt.axis('off')
-
+    
     if test_data_name is not None:
-        save_path = save_path + test_data_name + '_'
-    plt.savefig(save_path + str(i) +'.png')
+        plt.savefig(f'{save_path}{test_data_name}_{i}.png')
+    else:
+        plt.savefig(f'{save_path}{i}.png')
     plt.close()
     
 

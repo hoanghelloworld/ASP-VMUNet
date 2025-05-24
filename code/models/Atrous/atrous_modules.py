@@ -312,6 +312,133 @@ class atrous_SS2D(nn.Module):
 
         return out_y
 
+    """ Atrous vanilla Mamba """
+    def forward_corev2(self, x: torch.Tensor):
+        self.selective_scan = selective_scan_fn
+        
+        B, C, H, W = x.shape
+        L = H * W
+        K = self.K
+        
+        x_list = []
+        for step_i in range(self.atrous_step):
+            xs = x[:, :, step_i::self.atrous_step, :].contiguous().view(B, -1, L//self.atrous_step)
+            x_list.append(xs)
+        
+        xs = torch.cat(x_list, dim=1).unsqueeze(1)  # [B, 1, C*step, L//step]
+        
+        x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs.view(B, K, -1, L//self.atrous_step), self.x_proj_weight)
+        dts, Bs, Cs = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=2)
+        dts = torch.einsum("b k r l, k d r -> b k d l", dts.view(B, K, -1, L//self.atrous_step), self.dt_projs_weight)
+        
+        xs = xs.float().view(B, -1, L//self.atrous_step)  # (b, k * d, l)
+        dts = dts.contiguous().float().view(B, -1, L//self.atrous_step)  # (b, k * d, l)
+        Bs = Bs.float().view(B, K, -1, L//self.atrous_step)  # (b, k, d_state, l)
+        Cs = Cs.float().view(B, K, -1, L//self.atrous_step)  # (b, k, d_state, l)
+        Ds = self.Ds.float().view(-1)  # (k * d)
+        As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)  # (k * d, d_state)
+        dt_projs_bias = self.dt_projs_bias.float().view(-1)  # (k * d)
+        
+        out_y = self.selective_scan(
+            xs, dts, 
+            As, Bs, Cs, Ds, z=None,
+            delta_bias=dt_projs_bias,
+            delta_softplus=True,
+            return_last_state=False,
+        ).view(B, -1, L//self.atrous_step)
+        
+        # Reshape back to original dimensions
+        out_y_reshaped = torch.zeros(B, C, L, device=out_y.device, dtype=out_y.dtype)
+        for step_i in range(self.atrous_step):
+            step_slice = slice(step_i * C // self.atrous_step, (step_i + 1) * C // self.atrous_step)
+            for i in range(self.atrous_step):
+                out_y_reshaped[:, :, i::self.atrous_step, :] = out_y[:, step_slice, :].view(B, C//self.atrous_step, H//self.atrous_step, W)
+        
+        return out_y_reshaped.view(B, C, L)
+    
+    """ Atrous SS2D """
+    def forward_corev3(self, x: torch.Tensor):
+        self.selective_scan = selective_scan_fn
+        
+        B, C, H, W = x.shape
+        L = H * W
+        K = self.K
+        
+        # Process different strided versions of the input
+        x_list = []
+        for k in range(K//self.atrous_step):
+            for step_i in range(self.atrous_step):
+                if k < 2:  # For the first two directions (normal and transpose)
+                    if k == 0:
+                        xs = x[:, :, step_i::self.atrous_step, :].contiguous().view(B, -1, L//self.atrous_step)
+                    else:
+                        xs = torch.transpose(x, dim0=2, dim1=3)[:, :, step_i::self.atrous_step, :].contiguous().view(B, -1, L//self.atrous_step)
+                else:  # For the flipped directions
+                    if k == 2:
+                        xs = torch.flip(x, dims=[-1])[:, :, step_i::self.atrous_step, :].contiguous().view(B, -1, L//self.atrous_step)
+                    else:
+                        xs = torch.flip(torch.transpose(x, dim0=2, dim1=3), dims=[-1])[:, :, step_i::self.atrous_step, :].contiguous().view(B, -1, L//self.atrous_step)
+                x_list.append(xs)
+        
+        xs = torch.stack(x_list, dim=1)  # [B, K*step, C, L//step]
+        
+        x_dbl = torch.einsum("b k d l, k c d -> b k c l", xs.view(B, K*self.atrous_step, -1, L//self.atrous_step), self.x_proj_weight)
+        dts, Bs, Cs = torch.split(x_dbl, [self.dt_rank, self.d_state, self.d_state], dim=2)
+        dts = torch.einsum("b k r l, k d r -> b k d l", dts.view(B, K*self.atrous_step, -1, L//self.atrous_step), self.dt_projs_weight)
+        
+        xs = xs.float().view(B, -1, L//self.atrous_step)  # (b, k*step * d, l)
+        dts = dts.contiguous().float().view(B, -1, L//self.atrous_step)  # (b, k*step * d, l)
+        Bs = Bs.float().view(B, K*self.atrous_step, -1, L//self.atrous_step)  # (b, k*step, d_state, l)
+        Cs = Cs.float().view(B, K*self.atrous_step, -1, L//self.atrous_step)  # (b, k*step, d_state, l)
+        Ds = self.Ds.float().view(-1)  # (k*step * d)
+        As = -torch.exp(self.A_logs.float()).view(-1, self.d_state)  # (k*step * d, d_state)
+        dt_projs_bias = self.dt_projs_bias.float().view(-1)  # (k*step * d)
+        
+        out_y = self.selective_scan(
+            xs, dts, 
+            As, Bs, Cs, Ds, z=None,
+            delta_bias=dt_projs_bias,
+            delta_softplus=True,
+            return_last_state=False,
+        ).view(B, K*self.atrous_step, -1, L//self.atrous_step)
+        
+        # Combine the results from different directions and strides
+        y_list = []
+        for k in range(K):
+            k_start = k * self.atrous_step
+            k_end = (k + 1) * self.atrous_step
+            
+            y_strided = torch.zeros(B, C, L, device=out_y.device, dtype=out_y.dtype)
+            
+            for i, idx in enumerate(range(k_start, k_end)):
+                out_slice = out_y[:, idx]
+                
+                # Reshape and place back in the correct positions
+                if k < 2:  # Normal and transposed
+                    if k == 0:
+                        for j in range(self.atrous_step):
+                            y_strided[:, :, j::self.atrous_step, :] = out_slice.view(B, C//self.atrous_step, H//self.atrous_step, W)
+                    else:
+                        out_slice = out_slice.view(B, C//self.atrous_step, W, H//self.atrous_step)
+                        out_slice = torch.transpose(out_slice, dim0=2, dim1=3)
+                        y_strided = out_slice.reshape(B, C, L)
+                else:  # Flipped and flipped-transposed
+                    if k == 2:
+                        out_slice = out_slice.view(B, C//self.atrous_step, H//self.atrous_step, W)
+                        out_slice = torch.flip(out_slice, dims=[-1])
+                        y_strided = out_slice.reshape(B, C, L)
+                    else:
+                        out_slice = out_slice.view(B, C//self.atrous_step, W, H//self.atrous_step)
+                        out_slice = torch.transpose(out_slice, dim0=2, dim1=3)
+                        out_slice = torch.flip(out_slice, dims=[-1])
+                        y_strided = out_slice.reshape(B, C, L)
+            
+            y_list.append(y_strided)
+        
+        # Combine all directions
+        y = sum(y_list)
+        return y
+
     """ Efficient SS2D Mamba
     Efficient scan comes from https://arxiv.org/abs/2403.09977
     """
